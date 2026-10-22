@@ -1,168 +1,110 @@
-# Singapore Taxis
+# Pluie et taxis libres à Singapour
 
-Projet de pipeline de données sur la disponibilité des taxis à Singapour, croisée avec la pluie et les parkings.
+Quand une averse commence à Singapour, combien de taxis libres disparaissent, et pendant combien de temps ?
+Ce projet répond à la question à partir de 90 jours de données ouvertes (data.gov.sg) :
+collecte, nettoyage, agrégation spatiale, analyse statistique, modèle de prédiction et carte interactive.
 
-## Sources de données
+## Résultats clés
 
-### Taxis
-- URL : https://api.data.gov.sg/v1/transport/taxi-availability
-- Mise à jour toutes les 30 secondes (source : LTA Datamall)
-- Format : GeoJSON
-- Paramètre `date_time` pour une date passée, format YYYY-MM-DDTHH:mm:ss (heure de Singapour)
-- Clé API optionnelle (pour des limites d'appels plus élevées)
-- Structure : FeatureCollection > features > geometry (MultiPoint) + properties
-- Coordonnées en WGS84 (EPSG:4326), ordre [longitude, latitude]
-- properties : timestamp (avec fuseau +08:00), taxi_count, api_info.status
-- Points en double observés dans les coordonnées, à vérifier au nettoyage
-- Historique : date_time renvoie le dernier relevé juste avant l'heure demandée
-- Ordre des points non significatif (parfois trié par longitude)
-- Doublons fréquents, précision GPS variable selon les points
-- Forte concentration de taxis libres à l'aéroport de Changi
-- Historique disponible au moins 3 mois en arrière (testé au 2026-07-14)
+- **-21 % de taxis libres** entre l'heure qui précède une averse et son creux, 15 à 30 minutes après le début
+  (1 173 averses analysées, intervalle de confiance à 95 % par bootstrap, test placebo)
+- **Retour à la normale en environ 1 h 45**
+- **Effet croissant avec l'intensité** : -9 % pour une pluie faible, -22 % au-delà de 5 mm en 15 minutes
+- **Un modèle de prédiction à 30 minutes qui bat la persistance de 20 %**, mais auquel les variables
+  de pluie n'apportent rien : l'effet est déjà porté par la dynamique récente des taxis
 
-### Pluie
-- URL : https://api-open.data.gov.sg/v2/real-time/api/rainfall
-- Fréquence de mise à jour : non indiquée dans la doc, à vérifier sur les données
-- Unité : millimètres (mm)
-- Paramètre `date` : YYYY-MM-DD (journée entière) ou YYYY-MM-DDTHH:mm:ss (instant précis), heure de Singapour
-- Sans paramètre, renvoie le dernier relevé
-- Clé API optionnelle
-- readings : liste de blocs { timestamp, data: [stationId, value] }
-- Horodatage arrondi à 5 minutes, un seul par bloc pour toutes les stations
-- Historique disponible via le paramètre date
-- Résultats paginés : 25 blocs de 5 min par page, suivre paginationToken jusqu'à ce qu'il disparaisse
-- Ordre des relevés : du plus récent au plus ancien
-- Stations parfois absentes de certains blocs (ex : S305 le 2026-10-07 entre 20h50 et 21h30) : ne pas confondre absence de donnée et 0 mm
+![Taxis libres autour du début d'une averse](figures/4_pluie_evenement.png)
 
-### Parkings (disponibilité)
-- URL : https://api.data.gov.sg/v1/transport/carpark-availability
-- Mise à jour toutes les minutes, appel recommandé une fois par minute
-- Paramètre `date_time` : YYYY-MM-DDTHH:mm:ss (heure de Singapour)
-- Types de places : C (voitures), H (poids lourds), S (motos avec side-car), Y (motos)
-- Clé API optionnelle
-- Structure : items > timestamp + carpark_data > [carpark_number, update_datetime, carpark_info]
-- carpark_info : liste par type de place (lot_type, lots_available, total_lots)
-- Jointure : carpark_number = Car Park No (CSV de référence)
-- Pièges : nombres stockés en texte (à convertir), update_datetime sans fuseau horaire (SGT implicite)
-- Historique disponible via date_time (testé au 2026-10-07)
+![Effet selon l'intensité de la pluie](figures/3_pluie_intensite.png)
 
-### Parkings (référence)
-- Source : https://data.gov.sg/datasets/d_23f946fa557947f93a8043bbef41dd09/view
-- Fichier CSV d'environ 2 300 parkings, mis à jour chaque mois
-- Colonnes clés : Car Park No, Address, X Coord, Y Coord
-- `Car Park No` sert de clé de jointure avec l'API de disponibilité
-- Coordonnées en SVY21 (système de Singapour), à convertir en latitude/longitude
+![Application interactive](docs/app_carte.png)
 
-## Points d'attention
-- Deux générations d'API : v1 (taxis, parkings) avec le paramètre `date_time`, v2 (pluie) avec le paramètre `date`
-- Toutes les heures sont en heure de Singapour (SGT)
-- Horodatages différents selon les sources (taxis à la seconde, pluie toutes les 5 min) : alignement nécessaire
+## Données
 
-## Backfill
-- Script : script/backfill.py
-- Période : du 2026-07-16 au 2026-10-14 (90 jours), heure de Singapour
-- Taxis et parkings : un relevé toutes les 15 minutes
-- Pluie : journées complètes, 12 pages de 25 relevés de 5 minutes par jour
-- Reprise automatique : les fichiers déjà présents sont sautés
-- Gestion des limites d'appels (HTTP 429) : pause puis nouvelle tentative
-- Volume : environ 3,3 Go de JSON brut
+Trois sources ouvertes de data.gov.sg, sur la période du 16 juillet au 14 octobre 2026 :
 
-## Qualité des données (constats)
+- **Taxis libres** : position GPS de chaque taxi disponible (API LTA, GeoJSON), un relevé toutes les 15 minutes
+- **Pluie** : cumul sur 5 minutes de 90 stations météo
+- **Parkings** : places disponibles d'environ 2 000 parkings publics (collectées, non utilisées dans l'analyse finale)
 
-### Taxis
-- taxi_count inclut les doublons : surestimation d'environ 4 % du nombre réel de taxis
-- 71 relevés identiques pour deux heures demandées différentes : absences de publication de plus de 15 min
+Volume : environ 8 700 relevés par source, 3,3 Go de JSON brut, 17,5 millions de positions de taxis.
 
-### Parkings
-- Aucune donnée pour les demandes à minuit pile (SGT) : un relevé manquant par jour, compensé par celui de 00h15
-- A88, places motos (Y) : places libres supérieures au total en permanence (erreur de la source)
-- Capteurs figés sur toute la période : WGL, NHC, W527, HE17, HG55, PL57, JM33 ; quasi figé : PL40. À exclure
-- Retards ponctuels de mise à jour (> 1 h) sur 1 524 parkings, environ 1 % des lignes : à signaler, pas à supprimer
+## Pipeline
 
-### Pluie
-- 90 stations, unité et type de mesure constants (cumul sur 5 min, en mm)
-- 20 tranches de 5 min sans aucun relevé sur 26 208 (ex : 2026-08-14 de 16h25 à 16h40)
-- 6,7 % des couples station x tranche absents : absence de donnée, à ne pas confondre avec 0 mm
-- Stations peu fiables : S203 (47 % de présence), S305, S224, S303, S307 (environ 60 %)
-- Pluie dans 1 % des relevés ; maximum de 19,7 mm en 5 min (à confirmer par les stations voisines)
+1. **Ingestion** (`backfill.py`, `ingest.py`) : récupération de l'historique par tranches de 15 minutes,
+   avec reprise automatique, gestion des limites d'appels (HTTP 429) et suivi de la pagination
+2. **Transformation** (`transform_*.py`) : aplatissement des JSON en Parquet, conversion des fuseaux horaires,
+   typage, dédoublonnage et contrôles qualité
+3. **Agrégation** (`aggregate.py`) : découpage de Singapour en 138 hexagones H3 (environ 5 km²) et alignement
+   des sources sur une grille de 15 minutes ; pluie de chaque zone prise à la station la plus proche disponible
+4. **Analyse** (`explore.py`) : comparaison à un attendu local (même zone, même quart d'heure, même jour
+   de la semaine, jours secs des 4 semaines avant et après), étude d'événement autour des averses, bootstrap et placebo
+5. **Modèle** (`model.py`, `model_v2.py`) : HistGradientBoostingRegressor (scikit-learn), découpage temporel,
+   comparaison à des références naïves et ablation avec et sans variables de pluie
+6. **Application** (`app.py`) : carte Streamlit et pydeck des zones H3, prédictions et moments pluvieux
 
-## Table d'analyse : processed/zone_15min.parquet
-- Grain : une ligne par zone H3 (résolution 7, environ 5 km²) et par tranche de 15 minutes
-- 138 zones x 8 737 tranches = 1 205 706 lignes
-- n_taxis : taxis libres uniques (relevé le plus proche de la tranche) ; vide si aucun relevé (0,9 % des tranches)
-- rain_mm_15min : cumul des 3 relevés de 5 min de la station la plus proche disponible (3 candidates)
-- rain_station, rain_station_km : station utilisée et distance (moyenne 1,7 km, max 8,8 km)
-- Zone la plus fournie : aéroport de Changi (186 taxis libres en moyenne)
+Outils : Python, pandas, PyArrow / Parquet, DuckDB, H3, scikit-learn, matplotlib, Streamlit, pydeck.
 
-## Résultats
+## Qualité des données
 
-### Effet de la pluie sur les taxis libres
-Méthode : nombre réel de taxis libres comparé au nombre attendu un jour sec,
-dans la même zone, à la même heure et le même jour de la semaine.
+La qualité des sources a été vérifiée et documentée à chaque étape :
 
-- Pluie faible (0 à 1 mm / 15 min) : -10 %
-- Pluie modérée (1 à 5 mm) : -16 %
-- Forte pluie (plus de 5 mm) : -24 %
-- Creux 15 à 30 min après le début d'une averse (-15 %), retour à la normale en environ 2 h 15
-- 1 173 débuts d'averse analysés sur 90 jours
+- Le compteur officiel de taxis inclut des positions en double : il surestime d'environ 4 % le nombre réel
+- 71 relevés de taxis identiques pour deux heures différentes, soit des absences de publication de plus de 15 minutes
+- Parkings : aucune donnée pour les demandes à minuit pile, 7 capteurs figés pendant toute la période,
+  un parking annonçant plus de places libres que de places totales
+- Pluie : 6,7 % des couples station x tranche absents, certaines stations présentes moins d'une fois sur deux ;
+  une absence de donnée n'est jamais traitée comme 0 mm
 
-### Autres constats
-- Moyenne stable d'un mois à l'autre (1 885 à 1 992 taxis libres)
-- Maximum à 20 h, minimum à 3 h en semaine
+## Modèle de prédiction
 
-### Limites
+Objectif : prédire le nombre de taxis libres par zone 30 minutes à l'avance.
+Entraînement jusqu'au 23 septembre, test du 24 septembre au 14 octobre.
+
+Erreur moyenne absolue, en taxis par zone (toutes les tranches, puis pendant la pluie) :
+
+- Persistance (« ce sera comme maintenant ») : 4,86 et 3,79
+- Modèle v1 (niveau, perte de Poisson) : 3,83 et 3,95
+- Modèle v2 (variation relative, poids renforcé sur la pluie, tendances) : 3,89 et 3,53
+- Modèle v2 sans aucune variable de pluie : 3,89 et 3,45
+
+La v2 bat la persistance de 20 % en général et de 12 % sur les débuts d'averse.
+Mais la version sans pluie fait aussi bien : à 30 minutes, l'effet de la pluie est déjà visible
+dans l'évolution récente du nombre de taxis.
+
+## Limites et pistes
+
 - Seuls les taxis libres sont observés : ni la flotte en service, ni la demande
-- Corrélation, pas causalité démontrée
-- Ratio supérieur à 1 dans l'heure précédant une averse : à investiguer
-- Peu de données de forte pluie (1 566 lignes)
+- L'analyse établit une association robuste, pas une causalité démontrée
+- Question ouverte : les taxis libres sont au-dessus de l'attendu juste avant les averses (+9 %),
+  et le placebo est décalé (0,91 au lieu de 1) ; piste à vérifier : le poids de l'aéroport de Changi dans les sommes
+- Le modèle peut se tromper nettement sur des cas précis (par exemple la nuit, où il exagère la chute)
+- Perspective : intégrer une prévision de pluie à très court terme (radar) pour anticiper les chutes
 
-### Effet de la pluie sur les taxis libres
-Méthode : nombre réel de taxis libres comparé à un attendu local (même zone,
-même quart d'heure, même jour de la semaine, jours secs des 4 semaines avant et après).
+## Lancer le projet
 
-- Baisse de 21 % des taxis libres entre l'heure qui précède une averse et son creux,
-  15 à 30 min après le début (intervalle de confiance à 95 % par bootstrap)
-- Retour au niveau normal en environ 1 h 45
-- Effet croissant avec l'intensité : -9 % (0 à 1 mm / 15 min), -15 % (1 à 5 mm), -22 % (plus de 5 mm)
-- Résultats stables avec deux méthodes de calcul de l'attendu (globale et locale)
-- Test placebo (même zone, même heure, 7 jours avant) : aucune chute en V,
-  ce qui confirme le lien avec la pluie
+    python -m venv .venv
+    .venv\Scripts\activate
+    pip install -r requirements.txt
 
-### Question ouverte
-- Taxis libres au-dessus de l'attendu dans l'heure qui précède une averse (+9 %),
-  et placebo décalé (0,91 au lieu de 1). Piste : poids de l'aéroport de Changi
-  dans les sommes. À vérifier en l'excluant ou en utilisant des médianes.
+    python script/backfill.py            # collecte de l'historique (plusieurs heures)
+    python script/transform_taxis.py
+    python script/transform_parkings.py
+    python script/transform_pluie.py
+    python script/aggregate.py
+    python script/explore.py
+    python script/model.py
+    python script/model_v2.py
+    streamlit run script/app.py
 
-## Modèle de prédiction (taxis libres par zone, à 30 minutes)
-- HistGradientBoostingRegressor (scikit-learn), découpage temporel :
-  entraînement jusqu'au 2026-09-23, test du 2026-09-24 au 2026-10-14
-- MAE en taxis par zone (toutes tranches | pluie > 1 mm | début d'averse) :
-  - Persistance : 4,86 | 3,79 | 4,03
-  - v1 (niveau, perte de Poisson) : 3,83 | 3,95 | 3,91
-  - v2 (variation relative, poids x10 sur la pluie, tendances) : 3,89 | 3,53 | 3,56
-  - v2 sans variables de pluie : 3,89 | 3,45 | 3,45
-- La v2 bat la persistance de 20 % en général et de 12 % sur les débuts d'averse
+Les données brutes et transformées ne sont pas versionnées (plusieurs gigaoctets) : elles sont régénérées par les scripts.
 
-## Conclusion
-- La pluie fait baisser les taxis libres d'environ 21 % (effet mesuré sur 1 173 averses)
-- À 30 minutes, cette information est déjà portée par la dynamique récente des taxis :
-  les variables météo n'améliorent pas la prévision (ablation avec et sans pluie)
-- Perspective : intégrer une prévision de pluie à très court terme (radar)
-  pour anticiper les chutes avant le début de l'averse
+## Structure
+    script/       scripts du pipeline, de l'analyse, des modèles et de l'application
+    figures/      graphiques produits par l'analyse et le modèle
+    docs/         captures de l'application
+    reference/    référentiel des parkings (CSV data.gov.sg)
+    raw/          données brutes JSON (non versionné)
+    processed/    tables Parquet et modèles (non versionné)
 
-## Application interactive
-- Lancement : streamlit run script/app.py
-- Carte des 138 zones H3 sur la période de test (24 septembre - 14 octobre 2026)
-- Affichages : taxis libres, prédiction à 30 min, variation prévue, pluie
-- Sélecteur des 15 moments les plus pluvieux, courbe journalière réel / modèle / persistance
-
-Exemples de limites observées :
-- 27/09 à 01h30 (averse au nord et à l'ouest) : le modèle exagère la chute nocturne
-  (-31 % prévu, -18 % réel)
-- 27/09 à 12h30 (pluie sur toute l'île) : chute déjà passée, le modèle prévoit
-  la remontée mais l'exagère (+11 % prévu, +4 % réel)
-
-  ## Collecte continue
-  - script/ingest.py : collecte de l'état actuel des trois sources, conçue pour être planifiée
-    toutes les 15 minutes (journal dans logs/ingest.log, reprise sur erreur)
-  - Non déployée en continu : l'analyse repose sur les 90 jours du backfill
+Données : data.gov.sg
