@@ -1,0 +1,10 @@
+requests
+pandas
+pyarrow
+duckdb
+h3
+matplotlib
+scikit-learn
+streamlit
+pydeck
+joblib
